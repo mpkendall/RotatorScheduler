@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if task %}Edit{% else %}Create{% endif %} Task</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>{% if task %}Edit Task{% else %}Create New Task{% endif %}</h1>
+            <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">← Back to Dashboard</a>
+        </header>
+
+        <div class="form-container">
+            <form id="taskForm" onsubmit="handleFormSubmit(event)">
+                <div class="form-group">
+                    <label for="name">Task Name *</label>
+                    <input type="text" id="name" name="name" required 
+                           value="{% if task %}{{ task.name }}{% endif %}">
+                </div>
+
+                <div class="form-group">
+                    <label for="task_id">Task ID</label>
+                    <div class="id-input-group">
+                        <input type="text" id="task_id" name="task_id" required 
+                               value="{% if task %}{{ task.task_id }}{% endif %}"
+                               {% if task %}disabled{% endif %}>
+                        {% if not task %}
+                        <button type="button" class="btn btn-sm" onclick="generateUUID()">Generate UUID</button>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="track_type">Track Type *</label>
+                    <select id="track_type" name="track_type" required onchange="toggleEndTime()">
+                        <option value="smooth" {% if task and task.track_type == 'smooth' %}selected{% endif %}>Smooth</option>
+                        <option value="live" {% if task and task.track_type == 'live' %}selected{% endif %}>Live</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="start_time">Start Time (UTC) *</label>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+               <input type="datetime-local" id="start_time" name="start_time" required 
+                   value="{% if start_local %}{{ start_local }}{% endif %}">
+                        <button type="button" class="btn btn-sm" onclick="setCurrentUTC('start_time')">Now (UTC)</button>
+                    </div>
+                    <small style="color: #666; display: block; margin-top: 5px;">Current UTC: <span id="current_utc">--:--:--</span></small>
+                </div>
+
+                <div class="form-group" id="end_time_group" style="{% if not task or task.track_type != 'live' %}display: none;{% endif %}">
+                    <label for="end_time">End Time (UTC) <span id="end_time_required">*</span></label>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+               <input type="datetime-local" id="end_time" name="end_time" 
+                   value="{% if end_local %}{{ end_local }}{% endif %}">
+                        <button type="button" class="btn btn-sm" onclick="setCurrentUTC('end_time')">Now (UTC)</button>
+                    </div>
+                </div>
+
+                <div class="form-group" id="udp_port_group" style="{% if not task or task.track_type != 'live' %}display: none;{% endif %}">
+                    <label for="udp_port">UDP Port <span id="udp_port_required">*</span></label>
+                    <input type="number" id="udp_port" name="udp_port" min="1024" max="65535"
+                           value="{% if task and task.udp_port %}{{ task.udp_port }}{% else %}4321{% endif %}">
+                </div>
+
+                <div class="form-group" id="track_data_group" style="{% if task and task.track_type == 'live' %}display: none;{% endif %}">
+                    <label>Track Data</label>
+                    <div id="trackDataEditor" class="track-data-editor">
+                        <div class="editor-controls">
+                            <button type="button" class="btn btn-sm" onclick="addTrackPoint()">+ Add Point</button>
+                            <button type="button" class="btn btn-sm" onclick="togglePasteMode()">Paste JSON</button>
+                        </div>
+                        <div id="pasteMode" style="display: none; margin-bottom: 15px;">
+                            <textarea id="jsonPaste" placeholder="Paste JSON track data here..." rows="6"></textarea>
+                            <div style="margin-top: 10px; display: flex; gap: 10px;">
+                                <button type="button" class="btn btn-sm" onclick="importJSON()">Import</button>
+                                <button type="button" class="btn btn-sm btn-secondary" onclick="togglePasteMode()">Cancel</button>
+                            </div>
+                        </div>
+                        <div id="pointsList" class="points-list">
+                        </div>
+                    </div>
+                    <textarea id="track_data" name="track_data" style="display: none;">{% if task %}{{ task.track_data | tojson }}{% endif %}</textarea>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">
+                        {% if task %}Save Changes{% else %}Create Task{% endif %}
+                    </button>
+                    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const isReadonly = {{ 'true' if readonly else 'false' }};
+        let trackPoints = [];
+
+        function generateUUID() {
+            const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+            document.getElementById('task_id').value = uuid;
+        }
+
+        function formatUTCForInput(date) {
+            // Format date as YYYY-MM-DDTHH:mm for datetime-local input
+            const year = date.getUTCFullYear();
+            const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(date.getUTCDate()).padStart(2, '0');
+            const hours = String(date.getUTCHours()).padStart(2, '0');
+            const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+            return `${year}-${month}-${day}T${hours}:${minutes}`;
+        }
+
+        function setCurrentUTC(fieldId) {
+            const now = new Date();
+            document.getElementById(fieldId).value = formatUTCForInput(now);
+        }
+
+        function updateCurrentUTCTime() {
+            const now = new Date();
+            const hours = String(now.getUTCHours()).padStart(2, '0');
+            const minutes = String(now.getUTCMinutes()).padStart(2, '0');
+            const seconds = String(now.getUTCSeconds()).padStart(2, '0');
+            document.getElementById('current_utc').textContent = `${hours}:${minutes}:${seconds}`;
+        }
+
+        function togglePasteMode() {
+            const pasteMode = document.getElementById('pasteMode');
+            pasteMode.style.display = pasteMode.style.display === 'none' ? 'block' : 'none';
+            if (pasteMode.style.display === 'block') {
+                document.getElementById('jsonPaste').focus();
+            }
+        }
+
+        function importJSON() {
+            const jsonText = document.getElementById('jsonPaste').value.trim();
+            if (!jsonText) {
+                alert('Please paste JSON data');
+                return;
+            }
+
+            try {
+                const data = JSON.parse(jsonText);
+                if (Array.isArray(data)) {
+                    trackPoints = data;
+                    renderTrackDataEditor();
+                    togglePasteMode();
+                    document.getElementById('jsonPaste').value = '';
+                    alert('JSON imported successfully!');
+                } else {
+                    alert('JSON must be an array of track points');
+                }
+            } catch (e) {
+                alert('Invalid JSON: ' + e.message);
+            }
+        }
+
+        function toggleEndTime() {
+            const trackType = document.getElementById('track_type').value;
+            const endTimeGroup = document.getElementById('end_time_group');
+            const udpPortGroup = document.getElementById('udp_port_group');
+            const trackDataGroup = document.getElementById('track_data_group');
+            const endTimeInput = document.getElementById('end_time');
+            const udpPortInput = document.getElementById('udp_port');
+            const endTimeRequired = document.getElementById('end_time_required');
+            const udpPortRequired = document.getElementById('udp_port_required');
+            
+            if (trackType === 'live') {
+                endTimeGroup.style.display = 'block';
+                udpPortGroup.style.display = 'block';
+                trackDataGroup.style.display = 'none';
+                endTimeInput.required = true;
+                udpPortInput.required = true;
+            } else {
+                endTimeGroup.style.display = 'none';
+                udpPortGroup.style.display = 'none';
+                trackDataGroup.style.display = 'block';
+                endTimeInput.required = false;
+                udpPortInput.required = false;
+            }
+        }
+
+        function initializeTrackData() {
+            const trackDataElement = document.getElementById('track_data');
+            const data = trackDataElement.value;
+            
+            try {
+                trackPoints = data ? JSON.parse(data) : [];
+            } catch (e) {
+                trackPoints = [];
+            }
+            
+            renderTrackDataEditor();
+        }
+
+        function renderTrackDataEditor() {
+            const pointsList = document.getElementById('pointsList');
+            pointsList.innerHTML = '';
+            
+            trackPoints.forEach((point, index) => {
+                const item = document.createElement('div');
+                item.className = 'point-item';
+                item.innerHTML = `
+                    <div class="point-fields">
+                        <div class="form-group">
+                            <label>Azimuth (°)</label>
+                            <input type="number" step="0.1" value="${point.azimuth || 0}" 
+                                   onchange="updatePoint(${index}, 'azimuth', this.value)">
+                        </div>
+                        <div class="form-group">
+                            <label>Elevation (°)</label>
+                            <input type="number" step="0.1" value="${point.elevation || 0}" 
+                                   onchange="updatePoint(${index}, 'elevation', this.value)">
+                        </div>
+                        <div class="form-group">
+                            <label>Time Offset (s)</label>
+                            <input type="number" step="1" value="${point.time_offset || 0}" 
+                                   onchange="updatePoint(${index}, 'time_offset', this.value)">
+                        </div>
+                        <button type="button" class="btn btn-sm btn-delete" onclick="removePoint(${index})">Remove</button>
+                    </div>
+                `;
+                pointsList.appendChild(item);
+            });
+            
+            updateHiddenTrackData();
+        }
+
+        function addTrackPoint() {
+            trackPoints.push({ azimuth: 0, elevation: 0, time_offset: 0 });
+            renderTrackDataEditor();
+        }
+
+        function removePoint(index) {
+            trackPoints.splice(index, 1);
+            renderTrackDataEditor();
+        }
+
+        function updatePoint(index, field, value) {
+            trackPoints[index][field] = parseFloat(value);
+            updateHiddenTrackData();
+        }
+
+        function updateHiddenTrackData() {
+            document.getElementById('track_data').value = JSON.stringify(trackPoints);
+        }
+
+        function handleFormSubmit(event) {
+            event.preventDefault();
+            
+            const isEdit = {{ 'true' if task else 'false' }};
+            const taskIdInput = document.getElementById('task_id').value;
+            const trackType = document.getElementById('track_type').value;
+            
+            // Handle UUID or numeric ID
+            let taskId;
+            if (isNaN(taskIdInput)) {
+                taskId = taskIdInput; // UUID string
+            } else {
+                taskId = parseInt(taskIdInput);
+            }
+            
+            const formData = {
+                task_id: taskId,
+                name: document.getElementById('name').value,
+                track_type: trackType,
+                start_time: document.getElementById('start_time').value,
+                end_time: document.getElementById('end_time').value || null,
+                track_data: trackType === 'smooth' ? trackPoints : null,
+                udp_port: trackType === 'live' ? (document.getElementById('udp_port').value ? parseInt(document.getElementById('udp_port').value) : null) : null
+            };
+
+            const method = isEdit ? 'PUT' : 'POST';
+            const url = isEdit ? `/api/tasks/${taskId}` : '/api/tasks';
+
+            fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(formData)
+            })
+            .then(response => {
+                if (!response.ok) return response.json().then(e => Promise.reject(e));
+                return response.json();
+            })
+            .then(data => {
+                alert('Task ' + (isEdit ? 'updated' : 'created') + ' successfully!');
+                window.location.href = '{{ url_for("dashboard") }}';
+            })
+            .catch(error => {
+                alert('Error: ' + (error.error || 'Unknown error occurred'));
+            });
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeTrackData();
+            updateCurrentUTCTime();
+            // Update UTC time display every second
+            setInterval(updateCurrentUTCTime, 1000);
+            // If this form is readonly (task ended), disable inputs and prevent submission
+            if (isReadonly) {
+                const form = document.getElementById('taskForm');
+                Array.from(form.elements).forEach(el => {
+                    // leave cancel/back links enabled
+                    if (el.tagName.toLowerCase() === 'a') return;
+                    el.disabled = true;
+                });
+                const submitBtn = form.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.style.display = 'none';
+                }
+                const notice = document.createElement('div');
+                notice.className = 'readonly-notice';
+                notice.textContent = 'This task has ended and cannot be edited.';
+                form.insertBefore(notice, form.firstChild);
+            }
+        });
+    </script>
+</body>
+</html>

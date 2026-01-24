@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rotator Task Scheduler</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Rotator Task Scheduler</h1>
+            <div class="header-actions">
+                <div id="rotator-status" class="status-indicator offline">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Offline</span>
+                </div>
+                <a href="{{ url_for('new_task_form') }}" class="btn btn-primary">+ New Task</a>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="tasks-section">
+                <h2>Tasks</h2>
+                {% if tasks %}
+                    <div class="tasks-list">
+                        {% for task in tasks %}
+                            <div class="task-card {% if task.status == 'ended' %}task-ended{% endif %}" data-task-id="{{ task.task_id }}">
+                                <div class="task-header">
+                                    <div class="task-info">
+                                        <h3>{{ task.name }}</h3>
+                                        <p class="task-meta">
+                                            <span class="badge badge-{{ task.track_type }}">{{ task.track_type }}</span>
+                                            <span class="badge status-{{ task.status }}">{{ task.status }}</span>
+                                            <span class="task-id">ID: {{ task.task_id }}</span>
+                                        </p>
+                                    </div>
+                                    <div class="task-actions">
+                                        {% if task.status == 'ended' %}
+                                            <span class="btn btn-sm btn-disabled">Ended</span>
+                                        {% else %}
+                                            <a href="{{ url_for('edit_task_form', task_id=task.task_id) }}" class="btn btn-sm btn-edit">Edit</a>
+                                        {% endif %}
+                                        <button class="btn btn-sm btn-delete" onclick="deleteTask('{{ task.task_id }}')">Delete</button>
+                                    </div>
+                                </div>
+                                <div class="task-details">
+                                    <p><strong>Start Time:</strong> {{ task.start_time }}</p>
+                                    {% if task.end_time %}
+                                        <p><strong>End Time:</strong> {{ task.end_time }}</p>
+                                    {% endif %}
+                                    {% if task.udp_port %}
+                                        <p><strong>UDP Port:</strong> {{ task.udp_port }}</p>
+                                    {% endif %}
+                                    <p><strong>Created:</strong> {{ task.created_at }}</p>
+                                    {% if task.track_data %}
+                                        <details>
+                                            <summary>Track Data</summary>
+                                            <pre><code>{{ task.track_data | tojson(indent=2) }}</code></pre>
+                                        </details>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="no-tasks">No tasks yet. Create one to get started!</p>
+                {% endif %}
+            </div>
+
+            <div class="status-section">
+                <div class="status-grid">
+                    <div class="status-card">
+                        <h3>Azimuth</h3>
+                        <div class="status-value" id="azimuth-val">--</div>
+                        <div class="status-sub">Speed: <span id="azimuth-speed">--</span> deg/s</div>
+                    </div>
+                    <div class="status-card">
+                        <h3>Elevation</h3>
+                        <div class="status-value" id="elevation-val">--</div>
+                        <div class="status-sub">Speed: <span id="elevation-speed">--</span> deg/s</div>
+                    </div>
+                    <div class="status-card">
+                        <h3>Camera Feed</h3>
+                        <div class="camera-container">
+<!--                             <img id="camera-preview" src="{{ url_for('get_camera_snapshot') }}" alt="Camera Feed" style="width: 100%; border-radius: 4px; min-height: 150px; background: #f0f0f0;">
+ -->                        
+                        <img src="/api/camera/snapshot" style="width:100%; height:200px; border:none;"></img>
+                    </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>
