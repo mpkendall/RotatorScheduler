@@ -44,7 +44,7 @@
                 <div class="form-group">
                     <label for="start_time">Start Time (UTC) *</label>
                     <div style="display: flex; gap: 10px; align-items: center;">
-               <input type="datetime-local" id="start_time" name="start_time" required 
+               <input type="datetime-local" step="1" id="start_time" name="start_time" required 
                    value="{% if start_local %}{{ start_local }}{% endif %}">
                         <button type="button" class="btn btn-sm" onclick="setCurrentUTC('start_time')">Now (UTC)</button>
                     </div>
