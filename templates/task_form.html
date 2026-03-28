@@ -58,15 +58,15 @@
                             <div class="satellite-observer-grid">
                                 <div class="form-group">
                                     <label for="observer_latitude">Observer Latitude</label>
-                                    <input type="number" id="observer_latitude" step="0.000001" value="{% if satellite_meta and satellite_meta.observer %}{{ satellite_meta.observer.latitude }}{% else %}0{% endif %}">
+                                    <input type="number" id="observer_latitude" step="0.000001" value="{% if satellite_meta and satellite_meta.observer %}{{ satellite_meta.observer.latitude }}{% else %}{{ observer_defaults.latitude }}{% endif %}">
                                 </div>
                                 <div class="form-group">
                                     <label for="observer_longitude">Observer Longitude</label>
-                                    <input type="number" id="observer_longitude" step="0.000001" value="{% if satellite_meta and satellite_meta.observer %}{{ satellite_meta.observer.longitude }}{% else %}0{% endif %}">
+                                    <input type="number" id="observer_longitude" step="0.000001" value="{% if satellite_meta and satellite_meta.observer %}{{ satellite_meta.observer.longitude }}{% else %}{{ observer_defaults.longitude }}{% endif %}">
                                 </div>
                                 <div class="form-group">
                                     <label for="observer_elevation_m">Observer Elevation (m)</label>
-                                    <input type="number" id="observer_elevation_m" step="1" value="{% if satellite_meta and satellite_meta.observer %}{{ satellite_meta.observer.elevation_m }}{% else %}0{% endif %}">
+                                    <input type="number" id="observer_elevation_m" step="1" value="{% if satellite_meta and satellite_meta.observer %}{{ satellite_meta.observer.elevation_m }}{% else %}{{ observer_defaults.elevation_m }}{% endif %}">
                                 </div>
                                 <div class="form-group">
                                     <label for="satellite_point_interval">Point Interval (s)</label>

@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, R
 from scheduler import Scheduler, Task
 from datetime import datetime, timezone
 import json
+import os
 import requests
 import warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -15,10 +16,24 @@ scheduler = Scheduler()
 satellite_service = SatelliteTrackingService()
 
 DEFAULT_SATELLITE_POINT_INTERVAL_SECONDS = 30
+
+
+def _float_env(name, default):
+    value = os.getenv(name)
+    if value is None or str(value).strip() == '':
+        return float(default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 DEFAULT_OBSERVER = {
-    'latitude': 0.0,
-    'longitude': 0.0,
-    'elevation_m': 0.0,
+    # Override these with env vars if needed:
+    # OBSERVER_DEFAULT_LATITUDE, OBSERVER_DEFAULT_LONGITUDE, OBSERVER_DEFAULT_ELEVATION_M
+    'latitude': 42.316236,
+    'longitude': -71.334760,
+    'elevation_m': 70,
 }
 
 def ensure_utc_time(time_str):
@@ -334,7 +349,14 @@ def delete_task(task_id):
 def new_task_form():
     """Form to create a new task"""
     # For a new task no times to pre-fill
-    return render_template('task_form.html', task=None, readonly=False, start_local=None, end_local=None)
+    return render_template(
+        'task_form.html',
+        task=None,
+        readonly=False,
+        start_local=None,
+        end_local=None,
+        observer_defaults=DEFAULT_OBSERVER,
+    )
 
 @app.route('/task/<task_id>/edit')
 def edit_task_form(task_id):
@@ -362,7 +384,14 @@ def edit_task_form(task_id):
         start_local = iso_to_local(getattr(task, 'start_time', None))
         end_local = iso_to_local(getattr(task, 'end_time', None))
 
-        return render_template('task_form.html', task=task, readonly=(getattr(task, 'status', None) == 'ended'), start_local=start_local, end_local=end_local)
+        return render_template(
+            'task_form.html',
+            task=task,
+            readonly=(getattr(task, 'status', None) == 'ended'),
+            start_local=start_local,
+            end_local=end_local,
+            observer_defaults=DEFAULT_OBSERVER,
+        )
     return redirect(url_for('dashboard'))
 
 if __name__ == '__main__':

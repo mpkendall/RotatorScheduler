@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import json
+import os
 import threading
 
 import requests
@@ -12,8 +14,9 @@ class SatelliteTrackingService:
     SATELLITE_LIST_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
     SATELLITE_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={norad_id}&FORMAT=TLE"
 
-    def __init__(self, cache_ttl_seconds=1800):
+    def __init__(self, cache_ttl_seconds=7200, stale_cache_max_age_seconds=172800, cache_file="satellite_cache.json"):
         self.cache_ttl_seconds = cache_ttl_seconds
+        self.stale_cache_max_age_seconds = stale_cache_max_age_seconds
         self.ts = load.timescale()
         self.session = requests.Session()
         self.session.headers.update(
@@ -25,6 +28,45 @@ class SatelliteTrackingService:
         self._lock = threading.Lock()
         self._satellite_cache = []
         self._satellite_cache_expires = datetime.min.replace(tzinfo=timezone.utc)
+        self.cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), cache_file)
+        self._load_cache_from_disk()
+
+    def _load_cache_from_disk(self):
+        try:
+            if not os.path.exists(self.cache_file):
+                return
+
+            with open(self.cache_file, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+
+            satellites = payload.get("satellites") or []
+            fetched_at_raw = payload.get("fetched_at")
+            if not satellites or not fetched_at_raw:
+                return
+
+            fetched_at = self._parse_iso_datetime(fetched_at_raw)
+            age_seconds = (datetime.now(timezone.utc) - fetched_at).total_seconds()
+            if age_seconds > self.stale_cache_max_age_seconds:
+                return
+
+            satellites.sort(key=lambda item: item["name"])
+            self._satellite_cache = satellites
+            self._satellite_cache_expires = fetched_at + timedelta(seconds=self.cache_ttl_seconds)
+        except Exception:
+            # Cache failures should never block runtime behavior.
+            return
+
+    def _save_cache_to_disk(self, satellites):
+        try:
+            payload = {
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "satellites": satellites,
+            }
+            with open(self.cache_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+        except Exception:
+            # Non-fatal: in-memory cache still functions.
+            return
 
     @staticmethod
     def _extract_norad_from_tle_line1(line1):
@@ -109,6 +151,7 @@ class SatelliteTrackingService:
                 return
 
             satellites = []
+            last_error = None
             try:
                 response = self.session.get(self.SATELLITE_LIST_URL, timeout=20)
                 response.raise_for_status()
@@ -125,15 +168,37 @@ class SatelliteTrackingService:
                             "name": name,
                         }
                     )
-            except requests.RequestException:
-                # Some networks/CDN policies block JSON endpoint; fallback to TLE list.
-                tle_response = self.session.get(self.SATELLITE_LIST_TLE_URL, timeout=20)
-                tle_response.raise_for_status()
-                satellites = self._parse_satellite_list_from_tle(tle_response.text)
+            except requests.RequestException as exc:
+                last_error = exc
+                try:
+                    # Some networks/CDN policies block JSON endpoint; fallback to TLE list.
+                    tle_response = self.session.get(self.SATELLITE_LIST_TLE_URL, timeout=20)
+                    tle_response.raise_for_status()
+                    satellites = self._parse_satellite_list_from_tle(tle_response.text)
+                except requests.RequestException as tle_exc:
+                    last_error = tle_exc
 
-            satellites.sort(key=lambda item: item["name"])
-            self._satellite_cache = satellites
-            self._satellite_cache_expires = now + timedelta(seconds=self.cache_ttl_seconds)
+            if satellites:
+                satellites.sort(key=lambda item: item["name"])
+                self._satellite_cache = satellites
+                self._satellite_cache_expires = now + timedelta(seconds=self.cache_ttl_seconds)
+                self._save_cache_to_disk(satellites)
+                return
+
+            # Upstream unreachable/stale: use stale in-memory cache if available.
+            if self._satellite_cache:
+                self._satellite_cache_expires = now + timedelta(seconds=300)
+                return
+
+            # Last resort: attempt reload from disk even if stale in-memory is empty.
+            self._load_cache_from_disk()
+            if self._satellite_cache:
+                self._satellite_cache_expires = now + timedelta(seconds=300)
+                return
+
+            if last_error:
+                raise last_error
+            raise RuntimeError("Could not load satellite list from upstream or cache")
 
     def list_satellites(self, query=None, limit=200):
         self._refresh_satellite_cache()
