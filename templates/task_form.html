@@ -37,8 +37,53 @@
                     <label for="track_type">Track Type *</label>
                     <select id="track_type" name="track_type" required onchange="toggleEndTime()">
                         <option value="smooth" {% if task and task.track_type == 'smooth' %}selected{% endif %}>Smooth</option>
+                        <option value="satellite" {% if task and task.track_type == 'satellite' %}selected{% endif %}>Satellite</option>
                         <option value="live" {% if task and task.track_type == 'live' %}selected{% endif %}>Live</option>
                     </select>
+                </div>
+
+                {% set satellite_meta = task.metadata.satellite if task and task.metadata and task.metadata.satellite else none %}
+                <div class="form-group" id="satellite_group" style="{% if not task or task.track_type != 'satellite' %}display: none;{% endif %}">
+                    <label>Satellite Track Settings</label>
+                    <div class="satellite-layout">
+                        <div class="satellite-column">
+                            <div class="satellite-search-row">
+                                <input type="text" id="satellite_search" placeholder="Search satellite name or NORAD ID">
+                                <button type="button" class="btn btn-sm" onclick="loadSatellites()">Search</button>
+                            </div>
+
+                            <label for="satellite_select">Satellite</label>
+                            <select id="satellite_select" size="8" onchange="handleSatelliteChange()"></select>
+
+                            <div class="satellite-observer-grid">
+                                <div class="form-group">
+                                    <label for="observer_latitude">Observer Latitude</label>
+                                    <input type="number" id="observer_latitude" step="0.000001" value="{% if satellite_meta and satellite_meta.observer %}{{ satellite_meta.observer.latitude }}{% else %}0{% endif %}">
+                                </div>
+                                <div class="form-group">
+                                    <label for="observer_longitude">Observer Longitude</label>
+                                    <input type="number" id="observer_longitude" step="0.000001" value="{% if satellite_meta and satellite_meta.observer %}{{ satellite_meta.observer.longitude }}{% else %}0{% endif %}">
+                                </div>
+                                <div class="form-group">
+                                    <label for="observer_elevation_m">Observer Elevation (m)</label>
+                                    <input type="number" id="observer_elevation_m" step="1" value="{% if satellite_meta and satellite_meta.observer %}{{ satellite_meta.observer.elevation_m }}{% else %}0{% endif %}">
+                                </div>
+                                <div class="form-group">
+                                    <label for="satellite_point_interval">Point Interval (s)</label>
+                                    <input type="number" id="satellite_point_interval" min="1" step="1" value="{% if satellite_meta and satellite_meta.point_interval_seconds %}{{ satellite_meta.point_interval_seconds }}{% else %}30{% endif %}">
+                                </div>
+                            </div>
+
+                            <button type="button" class="btn btn-sm" onclick="loadSatellitePasses()">Load Passes</button>
+                        </div>
+
+                        <div class="satellite-column">
+                            <label for="satellite_passes">Upcoming Passes</label>
+                            <select id="satellite_passes" size="12" onchange="handlePassSelection()"></select>
+                            <small id="satellite_pass_hint" style="display:block; margin-top:8px; color:#666;">Select a pass to generate smooth points.</small>
+                            <small id="satellite_track_summary" style="display:block; margin-top:6px; color:#333;"></small>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -66,7 +111,7 @@
                            value="{% if task and task.udp_port %}{{ task.udp_port }}{% else %}4321{% endif %}">
                 </div>
 
-                <div class="form-group" id="track_data_group" style="{% if task and task.track_type == 'live' %}display: none;{% endif %}">
+                <div class="form-group" id="track_data_group" style="{% if task and task.track_type != 'smooth' %}display: none;{% endif %}">
                     <label>Track Data</label>
                     <div id="trackDataEditor" class="track-data-editor">
                         <div class="editor-controls">
@@ -98,7 +143,12 @@
 
     <script>
         const isReadonly = {{ 'true' if readonly else 'false' }};
+        const initialSatelliteMeta = {{ satellite_meta | tojson }};
         let trackPoints = [];
+        let satelliteTrackPoints = [];
+        let satelliteList = [];
+        let satellitePasses = [];
+        let initialSatellitePrefillApplied = false;
 
         function generateUUID() {
             const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -168,24 +218,214 @@
             const endTimeGroup = document.getElementById('end_time_group');
             const udpPortGroup = document.getElementById('udp_port_group');
             const trackDataGroup = document.getElementById('track_data_group');
+            const satelliteGroup = document.getElementById('satellite_group');
             const endTimeInput = document.getElementById('end_time');
             const udpPortInput = document.getElementById('udp_port');
-            const endTimeRequired = document.getElementById('end_time_required');
-            const udpPortRequired = document.getElementById('udp_port_required');
             
             if (trackType === 'live') {
                 endTimeGroup.style.display = 'block';
                 udpPortGroup.style.display = 'block';
                 trackDataGroup.style.display = 'none';
+                satelliteGroup.style.display = 'none';
                 endTimeInput.required = true;
                 udpPortInput.required = true;
+            } else if (trackType === 'satellite') {
+                endTimeGroup.style.display = 'none';
+                udpPortGroup.style.display = 'none';
+                trackDataGroup.style.display = 'none';
+                satelliteGroup.style.display = 'block';
+                endTimeInput.required = false;
+                udpPortInput.required = false;
+                if (satelliteList.length === 0) {
+                    loadSatellites();
+                }
             } else {
                 endTimeGroup.style.display = 'none';
                 udpPortGroup.style.display = 'none';
                 trackDataGroup.style.display = 'block';
+                satelliteGroup.style.display = 'none';
                 endTimeInput.required = false;
                 udpPortInput.required = false;
             }
+        }
+
+        function getObserverConfig() {
+            return {
+                latitude: parseFloat(document.getElementById('observer_latitude').value),
+                longitude: parseFloat(document.getElementById('observer_longitude').value),
+                elevation_m: parseFloat(document.getElementById('observer_elevation_m').value || '0')
+            };
+        }
+
+        function setSatelliteSummary(text) {
+            document.getElementById('satellite_track_summary').textContent = text;
+        }
+
+        function formatPassLabel(passObj, index) {
+            const start = new Date(passObj.rise_time);
+            const end = new Date(passObj.set_time);
+            const maxEl = passObj.max_elevation != null ? passObj.max_elevation.toFixed(1) : '--';
+            return `${index + 1}. ${start.toISOString()} -> ${end.toISOString()} | max el ${maxEl}° | ${passObj.duration_seconds}s`;
+        }
+
+        function loadSatellites() {
+            const query = encodeURIComponent(document.getElementById('satellite_search').value || '');
+            fetch(`/api/satellites?query=${query}&limit=250`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+
+                    satelliteList = data.satellites || [];
+                    const select = document.getElementById('satellite_select');
+                    select.innerHTML = '';
+
+                    satelliteList.forEach(sat => {
+                        const option = document.createElement('option');
+                        option.value = sat.norad_id;
+                        option.textContent = `${sat.name} (${sat.norad_id})`;
+                        select.appendChild(option);
+                    });
+
+                    if (initialSatelliteMeta && initialSatelliteMeta.norad_id) {
+                        const match = satelliteList.find(s => String(s.norad_id) === String(initialSatelliteMeta.norad_id));
+                        if (match) {
+                            select.value = String(match.norad_id);
+                            if (!initialSatellitePrefillApplied && initialSatelliteMeta.pass_start) {
+                                initialSatellitePrefillApplied = true;
+                                loadSatellitePasses();
+                            }
+                        }
+                    }
+                })
+                .catch(error => {
+                    alert(`Error loading satellites: ${error.message}`);
+                });
+        }
+
+        function handleSatelliteChange() {
+            satellitePasses = [];
+            satelliteTrackPoints = [];
+            document.getElementById('satellite_passes').innerHTML = '';
+            setSatelliteSummary('');
+            updateHiddenTrackData();
+        }
+
+        function loadSatellitePasses() {
+            const satSelect = document.getElementById('satellite_select');
+            const selectedNorad = satSelect.value;
+            if (!selectedNorad) {
+                alert('Select a satellite first.');
+                return;
+            }
+
+            const startTimeInput = document.getElementById('start_time').value;
+            const startTime = startTimeInput || new Date().toISOString();
+
+            const observer = getObserverConfig();
+            if (Number.isNaN(observer.latitude) || Number.isNaN(observer.longitude) || Number.isNaN(observer.elevation_m)) {
+                alert('Observer latitude, longitude and elevation must be valid numbers.');
+                return;
+            }
+
+            fetch('/api/satellites/passes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    norad_id: parseInt(selectedNorad),
+                    start_time: startTime,
+                    observer: observer,
+                    window_hours: 24,
+                    min_elevation_degrees: 5,
+                    max_passes: 12
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                satellitePasses = data.passes || [];
+                const passSelect = document.getElementById('satellite_passes');
+                passSelect.innerHTML = '';
+
+                satellitePasses.forEach((passObj, index) => {
+                    const option = document.createElement('option');
+                    option.value = String(index);
+                    option.textContent = formatPassLabel(passObj, index);
+                    passSelect.appendChild(option);
+                });
+
+                if (satellitePasses.length === 0) {
+                    setSatelliteSummary('No passes found in the next 24 hours for this observer and minimum elevation.');
+                    satelliteTrackPoints = [];
+                    updateHiddenTrackData();
+                    return;
+                }
+
+                if (initialSatelliteMeta && initialSatelliteMeta.pass_start) {
+                    const existingIndex = satellitePasses.findIndex(p => p.rise_time === initialSatelliteMeta.pass_start && p.set_time === initialSatelliteMeta.pass_end);
+                    if (existingIndex >= 0) {
+                        passSelect.value = String(existingIndex);
+                    }
+                } else {
+                    passSelect.value = '0';
+                }
+
+                handlePassSelection();
+            })
+            .catch(error => {
+                alert(`Error loading passes: ${error.message}`);
+            });
+        }
+
+        function handlePassSelection() {
+            const passSelect = document.getElementById('satellite_passes');
+            if (!passSelect.value) {
+                return;
+            }
+
+            const passObj = satellitePasses[parseInt(passSelect.value, 10)];
+            if (!passObj) {
+                return;
+            }
+
+            const satSelect = document.getElementById('satellite_select');
+            const intervalSeconds = parseInt(document.getElementById('satellite_point_interval').value || '30', 10);
+            if (Number.isNaN(intervalSeconds) || intervalSeconds <= 0) {
+                alert('Point Interval must be a positive integer.');
+                return;
+            }
+
+            const observer = getObserverConfig();
+            fetch('/api/satellites/track', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    norad_id: parseInt(satSelect.value, 10),
+                    satellite_name: satSelect.options[satSelect.selectedIndex].textContent,
+                    pass_start: passObj.rise_time,
+                    pass_end: passObj.set_time,
+                    point_interval_seconds: intervalSeconds,
+                    observer: observer
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                satelliteTrackPoints = data.track_data || [];
+                updateHiddenTrackData();
+                document.getElementById('start_time').value = (new Date(data.start_time)).toISOString().slice(0, 16);
+                setSatelliteSummary(`Generated ${satelliteTrackPoints.length} points at ${intervalSeconds}s spacing.`);
+            })
+            .catch(error => {
+                alert(`Error generating track points: ${error.message}`);
+            });
         }
 
         function initializeTrackData() {
@@ -250,7 +490,12 @@
         }
 
         function updateHiddenTrackData() {
-            document.getElementById('track_data').value = JSON.stringify(trackPoints);
+            const trackType = document.getElementById('track_type').value;
+            if (trackType === 'satellite') {
+                document.getElementById('track_data').value = JSON.stringify(satelliteTrackPoints);
+            } else {
+                document.getElementById('track_data').value = JSON.stringify(trackPoints);
+            }
         }
 
         function handleFormSubmit(event) {
@@ -274,9 +519,43 @@
                 track_type: trackType,
                 start_time: document.getElementById('start_time').value,
                 end_time: document.getElementById('end_time').value || null,
-                track_data: trackType === 'smooth' ? trackPoints : null,
+                track_data: trackType === 'smooth' ? trackPoints : (trackType === 'satellite' ? satelliteTrackPoints : null),
                 udp_port: trackType === 'live' ? (document.getElementById('udp_port').value ? parseInt(document.getElementById('udp_port').value) : null) : null
             };
+
+            if (trackType === 'satellite') {
+                const satSelect = document.getElementById('satellite_select');
+                const passSelect = document.getElementById('satellite_passes');
+                const intervalSeconds = parseInt(document.getElementById('satellite_point_interval').value || '30', 10);
+
+                if (!satSelect.value) {
+                    alert('Please select a satellite.');
+                    return;
+                }
+                if (!passSelect.value && passSelect.value !== '0') {
+                    alert('Please select a pass.');
+                    return;
+                }
+                if (Number.isNaN(intervalSeconds) || intervalSeconds <= 0) {
+                    alert('Point Interval must be a positive integer.');
+                    return;
+                }
+
+                const passObj = satellitePasses[parseInt(passSelect.value, 10)];
+                if (!passObj) {
+                    alert('Selected pass is invalid. Reload passes and try again.');
+                    return;
+                }
+
+                formData.satellite_config = {
+                    norad_id: parseInt(satSelect.value, 10),
+                    satellite_name: satSelect.options[satSelect.selectedIndex].textContent,
+                    pass_start: passObj.rise_time,
+                    pass_end: passObj.set_time,
+                    point_interval_seconds: intervalSeconds,
+                    observer: getObserverConfig()
+                };
+            }
 
             const method = isEdit ? 'PUT' : 'POST';
             const url = isEdit ? `/api/tasks/${taskId}` : '/api/tasks';
@@ -304,9 +583,28 @@
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             initializeTrackData();
+            toggleEndTime();
             updateCurrentUTCTime();
             // Update UTC time display every second
             setInterval(updateCurrentUTCTime, 1000);
+
+            if (initialSatelliteMeta) {
+                loadSatellites();
+                if (initialSatelliteMeta.point_interval_seconds) {
+                    document.getElementById('satellite_point_interval').value = initialSatelliteMeta.point_interval_seconds;
+                }
+                if (Array.isArray(trackPoints) && trackPoints.length > 0) {
+                    satelliteTrackPoints = trackPoints;
+                    setSatelliteSummary(`Loaded ${satelliteTrackPoints.length} previously generated points.`);
+                }
+            }
+
+            document.getElementById('satellite_point_interval').addEventListener('change', function() {
+                if (document.getElementById('track_type').value === 'satellite') {
+                    handlePassSelection();
+                }
+            });
+
             // If this form is readonly (task ended), disable inputs and prevent submission
             if (isReadonly) {
                 const form = document.getElementById('taskForm');

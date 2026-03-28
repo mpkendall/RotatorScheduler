@@ -142,7 +142,7 @@ class TaskExecutor:
                     pass
             
             # Check if smooth track has completed - only if task has been started
-            if task.task_id in self.started_tasks and task.track_type == 'smooth':
+            if task.task_id in self.started_tasks and task.track_type in ('smooth', 'satellite'):
                 # Smooth tracks are considered done after they execute
                 # Check if all waypoints have been processed (look at task end based on last waypoint)
                 if task.track_data:
@@ -164,7 +164,7 @@ class TaskExecutor:
                                     pass
                             except Exception:
                                 pass
-                            print(f"Smooth track task {task.task_id} completed")
+                            print(f"{task.track_type.title()} track task {task.task_id} completed")
                     except:
                         pass
     
@@ -181,7 +181,7 @@ class TaskExecutor:
         except Exception:
             pass
         
-        if task.track_type == 'smooth':
+        if task.track_type in ('smooth', 'satellite'):
             self._execute_smooth_track(task, task_start)
         elif task.track_type == 'live':
             self._execute_live_track(task, task_start)

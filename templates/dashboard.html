@@ -6,22 +6,33 @@
     <title>Rotator Task Scheduler</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-    <div class="container">
-        <header>
-            <h1>Rotator Task Scheduler</h1>
+<body class="dashboard-page">
+    <div class="container ops-shell">
+        <header class="ops-header">
+            <div class="ops-header-main">
+                <h1>Rotator Task Scheduler</h1>
+            </div>
             <div class="header-actions">
-                <div id="rotator-status" class="status-indicator offline">
-                    <span class="status-dot"></span>
-                    <span class="status-text">Offline</span>
+                <div class="ops-pill-group">
+                    <div id="rotator-status" class="status-indicator offline" role="status" aria-live="polite">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Offline</span>
+                    </div>
+                    <div class="utc-indicator">
+                        <span class="utc-label">UTC</span>
+                        <span id="utc-clock">--:--:--</span>
+                    </div>
                 </div>
                 <a href="{{ url_for('new_task_form') }}" class="btn btn-primary">+ New Task</a>
             </div>
         </header>
 
         <div class="main-content">
-            <div class="tasks-section">
-                <h2>Tasks</h2>
+            <section class="tasks-section">
+                <div class="section-head">
+                    <h2>Scheduled Tasks</h2>
+                    <p>{{ tasks|length }} total</p>
+                </div>
                 {% if tasks %}
                     <div class="tasks-list">
                         {% for task in tasks %}
@@ -64,11 +75,15 @@
                         {% endfor %}
                     </div>
                 {% else %}
-                    <p class="no-tasks">No tasks yet. Create one to get started!</p>
+                    <p class="no-tasks">No scheduled tasks. Create one to start a tracking window.</p>
                 {% endif %}
-            </div>
+            </section>
 
-            <div class="status-section">
+            <aside class="status-section">
+                <div class="section-head">
+                    <h2>Live Telemetry</h2>
+                    <p>2s status updates</p>
+                </div>
                 <div class="status-grid">
                     <div class="status-card">
                         <h3>Azimuth</h3>
@@ -83,13 +98,11 @@
                     <div class="status-card">
                         <h3>Camera Feed</h3>
                         <div class="camera-container">
-<!--                             <img id="camera-preview" src="{{ url_for('get_camera_snapshot') }}" alt="Camera Feed" style="width: 100%; border-radius: 4px; min-height: 150px; background: #f0f0f0;">
- -->                        
-                        <img src="/api/camera/snapshot" style="width:100%; height:200px; border:none;"></img>
-                    </div>
+                            <img id="camera-preview" src="/api/camera/snapshot" alt="Live camera feed" style="width:100%; height:200px; border:none;">
+                        </div>
                     </div>
                 </div>
-            </div>
+            </aside>
         </div>
     </div>
 

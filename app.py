@@ -5,12 +5,21 @@ import json
 import requests
 import warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
+from satellite_tracking import SatelliteTrackingService
 
 # Suppress insecure request warnings for local camera
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
 app = Flask(__name__)
 scheduler = Scheduler()
+satellite_service = SatelliteTrackingService()
+
+DEFAULT_SATELLITE_POINT_INTERVAL_SECONDS = 30
+DEFAULT_OBSERVER = {
+    'latitude': 0.0,
+    'longitude': 0.0,
+    'elevation_m': 0.0,
+}
 
 def ensure_utc_time(time_str):
     """Convert datetime string to UTC ISO format"""
@@ -26,6 +35,91 @@ def ensure_utc_time(time_str):
         return dt.isoformat()
     except:
         return time_str
+
+
+def parse_iso_to_utc(time_str):
+    if not time_str:
+        raise ValueError('Missing datetime value')
+    normalized = time_str.strip()
+    if normalized.endswith('Z'):
+        normalized = normalized[:-1] + '+00:00'
+    dt = datetime.fromisoformat(normalized)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def build_satellite_task_payload(payload):
+    satellite_config = payload.get('satellite_config')
+    if not isinstance(satellite_config, dict):
+        raise ValueError('Satellite tasks require satellite_config')
+
+    norad_id = satellite_config.get('norad_id')
+    pass_start = satellite_config.get('pass_start')
+    pass_end = satellite_config.get('pass_end')
+    satellite_name = satellite_config.get('satellite_name')
+
+    if not norad_id:
+        raise ValueError('satellite_config.norad_id is required')
+    if not pass_start or not pass_end:
+        raise ValueError('satellite_config.pass_start and satellite_config.pass_end are required')
+
+    observer = satellite_config.get('observer') or {}
+    latitude = observer.get('latitude', DEFAULT_OBSERVER['latitude'])
+    longitude = observer.get('longitude', DEFAULT_OBSERVER['longitude'])
+    elevation_m = observer.get('elevation_m', DEFAULT_OBSERVER['elevation_m'])
+
+    try:
+        latitude = float(latitude)
+        longitude = float(longitude)
+        elevation_m = float(elevation_m)
+    except (TypeError, ValueError):
+        raise ValueError('Observer latitude/longitude/elevation must be numeric')
+
+    if latitude < -90 or latitude > 90:
+        raise ValueError('Observer latitude must be between -90 and 90')
+    if longitude < -180 or longitude > 180:
+        raise ValueError('Observer longitude must be between -180 and 180')
+
+    interval = satellite_config.get('point_interval_seconds', DEFAULT_SATELLITE_POINT_INTERVAL_SECONDS)
+    try:
+        interval = int(interval)
+    except (TypeError, ValueError):
+        raise ValueError('point_interval_seconds must be an integer')
+
+    if interval <= 0:
+        raise ValueError('point_interval_seconds must be greater than 0')
+
+    track_points = satellite_service.generate_track_points(
+        norad_id=norad_id,
+        observer_lat=latitude,
+        observer_lon=longitude,
+        observer_elevation_m=elevation_m,
+        pass_start=pass_start,
+        pass_end=pass_end,
+        point_interval_seconds=interval,
+    )
+
+    start_dt = parse_iso_to_utc(pass_start)
+
+    normalized_config = {
+        'norad_id': int(norad_id),
+        'satellite_name': satellite_name,
+        'pass_start': parse_iso_to_utc(pass_start).isoformat(),
+        'pass_end': parse_iso_to_utc(pass_end).isoformat(),
+        'point_interval_seconds': interval,
+        'observer': {
+            'latitude': latitude,
+            'longitude': longitude,
+            'elevation_m': elevation_m,
+        },
+    }
+
+    return {
+        'start_time': start_dt.isoformat(),
+        'track_data': track_points,
+        'metadata': {'satellite': normalized_config},
+    }
 
 @app.route('/')
 def dashboard():
@@ -68,6 +162,71 @@ def get_tasks():
     tasks = scheduler.get_tasks()
     return jsonify([task.to_dict() for task in tasks])
 
+
+@app.route('/api/satellites', methods=['GET'])
+def list_satellites():
+    """List satellites from CelesTrak cache (optionally filtered)."""
+    try:
+        query = request.args.get('query', '')
+        limit = int(request.args.get('limit', 200))
+        satellites = satellite_service.list_satellites(query=query, limit=limit)
+        return jsonify({'satellites': satellites})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/satellites/passes', methods=['POST'])
+def get_satellite_passes():
+    """Return upcoming visible passes for a selected satellite and observer location."""
+    try:
+        data = request.get_json() or {}
+        norad_id = data.get('norad_id')
+        start_time = data.get('start_time')
+        observer = data.get('observer') or {}
+
+        if not norad_id:
+            return jsonify({'error': 'norad_id is required'}), 400
+        if not start_time:
+            return jsonify({'error': 'start_time is required'}), 400
+
+        latitude = float(observer.get('latitude', DEFAULT_OBSERVER['latitude']))
+        longitude = float(observer.get('longitude', DEFAULT_OBSERVER['longitude']))
+        elevation_m = float(observer.get('elevation_m', DEFAULT_OBSERVER['elevation_m']))
+        window_hours = float(data.get('window_hours', 24))
+        min_elevation_degrees = float(data.get('min_elevation_degrees', 5))
+        max_passes = int(data.get('max_passes', 12))
+
+        passes = satellite_service.get_next_passes(
+            norad_id=norad_id,
+            observer_lat=latitude,
+            observer_lon=longitude,
+            observer_elevation_m=elevation_m,
+            window_start=start_time,
+            window_hours=window_hours,
+            min_elevation_degrees=min_elevation_degrees,
+            max_passes=max_passes,
+        )
+        return jsonify({'passes': passes})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/satellites/track', methods=['POST'])
+def generate_satellite_track():
+    """Generate smooth-style az/el waypoints for a selected satellite pass."""
+    try:
+        data = request.get_json() or {}
+        task_payload = build_satellite_task_payload({'satellite_config': data})
+        return jsonify(
+            {
+                'start_time': task_payload['start_time'],
+                'track_data': task_payload['track_data'],
+                'metadata': task_payload['metadata'],
+            }
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
 @app.route('/api/tasks', methods=['POST'])
 def create_task():
     """API endpoint to create a new task"""
@@ -89,6 +248,13 @@ def create_task():
         # For smooth tasks, track_data is required
         if data['track_type'] == 'smooth' and 'track_data' not in data:
             return jsonify({'error': 'Smooth tasks require track_data'}), 400
+
+        # Satellite tasks derive smooth-like track_data from selected pass and observer location
+        if data['track_type'] == 'satellite':
+            satellite_payload = build_satellite_task_payload(data)
+            data['start_time'] = satellite_payload['start_time']
+            data['track_data'] = satellite_payload['track_data']
+            data['metadata'] = satellite_payload['metadata']
         
         task = Task(
             task_id=data['task_id'],
@@ -97,7 +263,8 @@ def create_task():
             start_time=ensure_utc_time(data['start_time']),
             end_time=ensure_utc_time(data.get('end_time')),
             track_data=data.get('track_data'),
-            udp_port=data.get('udp_port')
+            udp_port=data.get('udp_port'),
+            metadata=data.get('metadata')
         )
         
         scheduler.add_task(task)
@@ -140,6 +307,14 @@ def update_task(task_id):
             task.end_time = ensure_utc_time(data['end_time'])
         if 'udp_port' in data:
             task.udp_port = data['udp_port']
+        if 'metadata' in data:
+            task.metadata = data.get('metadata') or {}
+
+        if task.track_type == 'satellite' and 'satellite_config' in data:
+            satellite_payload = build_satellite_task_payload(data)
+            task.start_time = satellite_payload['start_time']
+            task.track_data = satellite_payload['track_data']
+            task.metadata = satellite_payload['metadata']
         
         scheduler.save_tasks()
         return jsonify(task.to_dict())

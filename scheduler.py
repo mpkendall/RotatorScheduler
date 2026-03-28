@@ -1,4 +1,4 @@
-# Each task object has a unique identifier, a name, and track type (smooth or live).
+# Each task object has a unique identifier, a name, and track type (smooth, satellite, or live).
 # A smooth track has several nodes with relative timestamps, azimuth and elevation angles, and slew (deg/s).
 # A live track represents a start and end absolute time, in which to expect continuous HTTP updates (just az/el values).
 # The host server keeps a running JSON list of tasks.
@@ -8,14 +8,15 @@ import os
 from datetime import datetime
 
 class Task:
-    def __init__(self, task_id, name, track_type, start_time, end_time=None, track_data=None, udp_port=None):
+    def __init__(self, task_id, name, track_type, start_time, end_time=None, track_data=None, udp_port=None, metadata=None):
         self.task_id = task_id
         self.name = name
-        self.track_type = track_type  # 'smooth' or 'live'
+        self.track_type = track_type  # 'smooth', 'satellite', or 'live'
         self.track_data = track_data  # List of nodes for smooth tracks only
         self.start_time = start_time  # Required for both smooth and live tasks
         self.end_time = end_time      # Required for live tasks, None for smooth tasks
         self.udp_port = udp_port      # UDP port for live tasks
+        self.metadata = metadata or {}  # Extra task-specific metadata (e.g. satellite config)
         self.status = 'pending'       # pending, running, ended
         self.created_at = datetime.now().isoformat()
     
@@ -30,6 +31,7 @@ class Task:
             "end_time": self.end_time,
             "status": getattr(self, 'status', 'pending'),
             "udp_port": self.udp_port,
+            "metadata": self.metadata,
             "created_at": self.created_at
         }
     
@@ -43,7 +45,8 @@ class Task:
             data["start_time"],
             data.get("end_time"),
             data.get("track_data"),
-            data.get("udp_port")
+            data.get("udp_port"),
+            data.get("metadata")
         )
         task.created_at = data.get("created_at", task.created_at)
         task.status = data.get("status", getattr(task, 'status', 'pending'))

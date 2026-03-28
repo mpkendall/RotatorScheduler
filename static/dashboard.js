@@ -6,13 +6,27 @@ document.addEventListener('DOMContentLoaded', function() {
     loadTasks();
     updateRotatorStatus();
     updateDetailedStatus();
+    updateUtcClock();
     // Poll every 5 minutes
     setInterval(updateRotatorStatus, 5 * 60 * 1000);
     // Poll detailed status every 2 seconds
     setInterval(updateDetailedStatus, 2000);
     // Refresh camera snapshot every 1 second
     setInterval(updateCameraSnapshot, 1000);
+    // Update UTC display once per second
+    setInterval(updateUtcClock, 1000);
 });
+
+function updateUtcClock() {
+    const utcClock = document.getElementById('utc-clock');
+    if (!utcClock) return;
+
+    const now = new Date();
+    const hours = String(now.getUTCHours()).padStart(2, '0');
+    const minutes = String(now.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(now.getUTCSeconds()).padStart(2, '0');
+    utcClock.textContent = `${hours}:${minutes}:${seconds}`;
+}
 
 function updateCameraSnapshot() {
     const img = document.getElementById('camera-preview');
