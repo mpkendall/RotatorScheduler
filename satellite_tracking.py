@@ -10,9 +10,7 @@ from skyfield.api import EarthSatellite, load, wgs84
 class SatelliteTrackingService:
     """Fetch satellite data and generate interpolated az/el track points."""
 
-    SATELLITE_LIST_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json"
-    SATELLITE_LIST_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
-    SATELLITE_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={norad_id}&FORMAT=TLE"
+    SATELLITE_LIST_URL = "https://www.amsat.org/tle/daily-bulletin.txt"
 
     def __init__(self, cache_ttl_seconds=7200, stale_cache_max_age_seconds=172800, cache_file="satellite_cache.json"):
         self.cache_ttl_seconds = cache_ttl_seconds
@@ -153,30 +151,12 @@ class SatelliteTrackingService:
             satellites = []
             last_error = None
             try:
+                # AMSAT only provides TLE format
                 response = self.session.get(self.SATELLITE_LIST_URL, timeout=20)
                 response.raise_for_status()
-                raw_list = response.json()
-
-                for entry in raw_list:
-                    name = (entry.get("OBJECT_NAME") or "").strip()
-                    norad_id = entry.get("NORAD_CAT_ID")
-                    if not name or norad_id is None:
-                        continue
-                    satellites.append(
-                        {
-                            "norad_id": int(norad_id),
-                            "name": name,
-                        }
-                    )
+                satellites = self._parse_satellite_list_from_tle(response.text)
             except requests.RequestException as exc:
                 last_error = exc
-                try:
-                    # Some networks/CDN policies block JSON endpoint; fallback to TLE list.
-                    tle_response = self.session.get(self.SATELLITE_LIST_TLE_URL, timeout=20)
-                    tle_response.raise_for_status()
-                    satellites = self._parse_satellite_list_from_tle(tle_response.text)
-                except requests.RequestException as tle_exc:
-                    last_error = tle_exc
 
             if satellites:
                 satellites.sort(key=lambda item: item["name"])
@@ -222,25 +202,35 @@ class SatelliteTrackingService:
         return satellites
 
     def _get_satellite_from_tle(self, norad_id):
-        response = self.session.get(self.SATELLITE_TLE_URL.format(norad_id=norad_id), timeout=15)
+        # AMSAT does not provide per-satellite endpoints; fetch full list and extract.
+        response = self.session.get(self.SATELLITE_LIST_URL, timeout=20)
         response.raise_for_status()
 
         lines = [line.strip() for line in response.text.splitlines() if line.strip()]
-        if len(lines) < 2:
-            raise ValueError(f"Could not load TLE for NORAD {norad_id}")
+        i = 0
+        while i < len(lines):
+            if not lines[i].startswith("1 "):
+                i += 1
+                continue
 
-        if len(lines) >= 3 and lines[1].startswith("1 ") and lines[2].startswith("2 "):
-            name = lines[0]
-            line1 = lines[1]
-            line2 = lines[2]
-        elif len(lines) >= 2 and lines[0].startswith("1 ") and lines[1].startswith("2 "):
-            name = f"NORAD {norad_id}"
-            line1 = lines[0]
-            line2 = lines[1]
-        else:
-            raise ValueError(f"Invalid TLE format for NORAD {norad_id}")
+            line1 = lines[i]
+            extracted_norad = self._extract_norad_from_tle_line1(line1)
+            if extracted_norad != int(norad_id):
+                i += 1
+                continue
 
-        return EarthSatellite(line1, line2, name, self.ts)
+            # Found the satellite; extract TLE lines.
+            name = None
+            if i > 0 and not lines[i - 1].startswith("1 ") and not lines[i - 1].startswith("2 "):
+                name = lines[i - 1]
+
+            if i + 1 < len(lines) and lines[i + 1].startswith("2 "):
+                line2 = lines[i + 1]
+                return EarthSatellite(line1, line2, name or f"NORAD {norad_id}", self.ts)
+
+            i += 1
+
+        raise ValueError(f"Could not find TLE for NORAD {norad_id} in AMSAT data")
 
     def get_next_passes(
         self,
