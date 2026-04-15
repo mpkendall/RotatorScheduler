@@ -29,6 +29,18 @@ class TaskExecutor:
         self.completed_tasks = set()  # Track completed tasks to prevent restart
         self.started_tasks = {}  # Map of task_id to start time for tasks that have been started
         self.started_at = None  # Executor start time to avoid executing past tasks on startup
+
+    def _parse_task_datetime(self, value):
+        """Parse task datetime values and normalize to UTC-aware datetimes."""
+        if not value:
+            return None
+        if value.endswith('Z'):
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        else:
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
         
     def start(self):
         """Start the task executor in a background thread"""
@@ -83,42 +95,44 @@ class TaskExecutor:
             # Skip if this task has already been completed
             if task.task_id in self.completed_tasks:
                 continue
+
+            # Never restart tasks already marked as ended in persisted state
+            if getattr(task, 'status', None) == 'ended':
+                self.completed_tasks.add(task.task_id)
+                continue
             
             # Parse task start time (assuming ISO format with or without timezone)
             try:
-                # Handle ISO format datetime strings
-                if task.start_time.endswith('Z'):
-                    task_start = datetime.fromisoformat(task.start_time.replace('Z', '+00:00'))
-                else:
-                    # Try to parse as naive datetime and assume UTC
-                    task_start = datetime.fromisoformat(task.start_time)
-                    if task_start.tzinfo is None:
-                        task_start = task_start.replace(tzinfo=timezone.utc)
+                task_start = self._parse_task_datetime(task.start_time)
             except (ValueError, AttributeError):
                 continue
             
             # Check if task start time has been reached and not yet started
-            # Do not execute tasks whose start_time is before the executor was started
-            if (self.started_at is not None and task_start >= self.started_at
-                    and now_utc >= task_start and task.task_id not in self.started_tasks):
-                self._execute_task(task, task_start)
-                self.started_tasks[task.task_id] = task_start
+            if now_utc >= task_start and task.task_id not in self.started_tasks:
+                should_start = self.started_at is None or task_start >= self.started_at
+
+                # Live tasks should start while their active window is open,
+                # even if the start time is slightly in the past.
+                if task.track_type == 'live' and task.end_time:
+                    try:
+                        task_end_for_start = self._parse_task_datetime(task.end_time)
+                        if now_utc <= task_end_for_start:
+                            should_start = True
+                    except (ValueError, AttributeError, TypeError):
+                        pass
+
+                if should_start:
+                    self._execute_task(task, task_start)
+                    self.started_tasks[task.task_id] = task_start
             
             # Check if task end time has passed (for live tasks) - only if task has been started
             if task.task_id in self.started_tasks and task.track_type == 'live' and task.end_time:
                 try:
-                    if task.end_time.endswith('Z'):
-                        task_end = datetime.fromisoformat(task.end_time.replace('Z', '+00:00'))
-                    else:
-                        task_end = datetime.fromisoformat(task.end_time)
-                        if task_end.tzinfo is None:
-                            task_end = task_end.replace(tzinfo=timezone.utc)
+                    task_end = self._parse_task_datetime(task.end_time)
                     
                     if now_utc > task_end:
-                        # Mark completed and remove started marker to avoid races
                         self.completed_tasks.add(task.task_id)
                         self.started_tasks.pop(task.task_id, None)
-                        # Close UDP socket if open (use pop to avoid KeyError from race)
                         sock = self.active_udp_sockets.pop(task.task_id, None)
                         if sock:
                             try:
@@ -128,7 +142,6 @@ class TaskExecutor:
                                 print(f"Error closing UDP socket for task {task.task_id}: {e}")
                         else:
                             print(f"No active UDP socket to close for task {task.task_id}")
-                        # mark task ended and persist
                         try:
                             task.status = 'ended'
                             try:
@@ -265,9 +278,9 @@ class TaskExecutor:
         """Listen for UDP updates with azimuth and elevation values"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.settimeout(2)  # 2 second timeout to check if task is still active
-            sock.bind(('0.0.0.0', task.udp_port))
+            #sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            #sock.settimeout(2)  # 2 second timeout to check if task is still active
+            sock.bind(('127.0.0.1', task.udp_port))
             
             self.active_udp_sockets[task.task_id] = sock
             print(f"UDP listener opened for task {task.task_id} on port {task.udp_port}")

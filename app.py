@@ -4,12 +4,7 @@ from datetime import datetime, timezone
 import json
 import os
 import requests
-import warnings
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
 from satellite_tracking import SatelliteTrackingService
-
-# Suppress insecure request warnings for local camera
-warnings.simplefilter('ignore', InsecureRequestWarning)
 
 app = Flask(__name__)
 scheduler = Scheduler()
@@ -159,17 +154,6 @@ def get_rotator_status():
         if status:
             return jsonify(status)
     return jsonify({'error': 'Could not fetch status'}), 503
-
-@app.route('/api/camera/snapshot')
-def get_camera_snapshot():
-    """Proxy camera snapshot to avoid CORS and Auth exposure"""
-    camera_url = "https://192.168.1.226/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=wuuPhkmUCeI9WG7C&user=admin&password=Maker$pace!18"
-    try:
-        resp = requests.get(camera_url, verify=False, timeout=5)
-        return Response(resp.content, mimetype=resp.headers.get('content-type', 'image/jpeg'))
-    except Exception as e:
-        # Return a placeholder or error indication image if needed, or just 500
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/tasks', methods=['GET'])
 def get_tasks():

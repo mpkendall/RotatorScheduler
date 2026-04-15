@@ -326,8 +326,8 @@ class SatelliteTrackingService:
             offset_seconds = int(round((sample_dt - start_dt).total_seconds()))
             points.append(
                 {
-                    "azimuth": round(float(az.degrees) % 360.0, 3),
-                    "elevation": round(max(float(alt.degrees), 0.0), 3),
+                    "azimuth": round(float(az.degrees) % 360.0),
+                    "elevation": round(max(float(alt.degrees), 0.0)),
                     "time_offset": offset_seconds,
                 }
             )
